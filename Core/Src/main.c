@@ -27,13 +27,15 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
+#include <math.h>
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define max_test_push_button 0x3*0x1103// 10.01 msec(29.73ms)
 #define max_try_to_inicialize_whoami 5
+#define with_avg	0xff
+#define whitout_avg	0x00
 
 #define	WHO_AM_I_ADDRES		0x0F
 
@@ -46,12 +48,21 @@
 #define hts221_av_conf				0x10 //1b
 #define hts221_crtl_reg_1 			0x20 //0x85
 
-#define lps25hb_DEVICE_ADDRESS_write	0xBA	//barometer+temp
+#define lps25hb_DEVICE_ADDRESS_write	0xBA	//barometer+temp(not coded)
 #define lps25hb_DEVICE_ADDRESS_read		0xBB
 #define	lps25hb_WHO_AM_I_VALUE 			0xBD
 //#define	lps25hb_WHO_AM_I_ADDRES			0x0F
 #define lps25hb_crtl_reg_1 				0x20 //0x90
 #define lps25hb_ADDRESS_pres_L 			0x28
+
+#define lis3mdl_DEVICE_ADDRESS_write	0x3c 	// magnetometer + temp(not to use)
+#define lis3mdl_DEVICE_ADDRESS_read		0x3d
+#define lis3mdl_WHO_AM_I_VALUE			0x3d
+#define lis3mdl_ADDRESS_CTRL1			0x20
+#define lis3mdl_ADDRESS_X				0x28
+#define lis3mdl_ADDRESS_Y				0x2A
+#define lis3mdl_ADDRESS_Z				0x2C
+#define lis3mdl_ADDRESS_TEMP_L			0x2e
 
 #define LSM6DS0_DEVICE_ADDRESS_write	0xD4 	// acelerometer + temp(not to use)
 #define LSM6DS0_DEVICE_ADDRESS_read		0xD6
@@ -78,17 +89,23 @@ uint8_t str[max_buff_size];
 
 uint16_t size_buff=0;
 uint16_t offset=0;
-//uint16_t prevoius=0xffff;
 
-float temperature=0;
-float humidity=0;
-float pressure=1020.0;
+float temperature=0.0;
+float humidity=0.0;
+float pressure=0.0;
+float altitude=0.0;
 float acc[3]={0.0,0.0,0.0};
-int16_t ret_val=0;
+float azymuth=0.0;
+//float azymuth_gain=0.0;
+//int16_t ret_val=0;
 
 // hts221 calibration register values
-uint8_t H0,H1;//0x30,0x31,
-int16_t H2,H3,T0,T1,T2,T3;//[36-37:msb],0x32,0x33,[3a-3b:msb],[3c-3d:msb],[3e-3f:msb]
+//uint8_t H0,H1;//0x30,0x31,
+uint8_t H_uint8[2];//0x30,0x31,
+//int16_t H2,H3,T0,T1,T2,T3;
+int16_t H_T_uint16_t[6];
+//uint16_t H_T_uint16_t[6];//H2[0],H3[1],T0[2],T1[3],T2,T3
+//int16_t T1,T2,T3;//[36-37:msb],0x32,0x33,[3a-3b:msb],[3c-3d:msb],[3e-3f:msb]
 
 
 uint8_t *aReceiveBuffer_read , end_of_read_flag = 0;
@@ -98,13 +115,15 @@ volatile uint8_t ubReceiveIndex = 0;
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
 void my_str_cpy(uint8_t * from, uint8_t * to, uint16_t *copied, uint16_t max);
+void convert_char_to_7seg(uint8_t ch,uint16_t *pa,uint16_t *pb);
 void convert_str_to_7seg(uint8_t *from, uint16_t *pa,uint16_t *pb,uint16_t max);
 void start_tim17_with_IT(void);
 void start_tim16_with_IT(void);
 void multiplex_display_fcn(uint16_t offset,uint16_t max_offset);
 uint8_t test_push_button_state(uint16_t max_test);
 void push_button_pushed_fcn(void);
-
+void calculate_altitude(uint8_t avg);
+void float_to_char(float num,uint8_t *ptr,uint8_t pos, uint8_t num_of_decimals_before_DP,uint8_t num_of_decimals_after_DP);
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
@@ -119,37 +138,39 @@ static void MX_GPIO_Init(void);
 static void MX_TIM17_Init(void);
 static void MX_TIM16_Init(void);
 static void MX_I2C1_Init(void);
-void push_button_pushed_fcn(void);
 
 void i2c_master_write(uint8_t data, uint8_t register_addr, uint8_t slave_addr, uint8_t read_flag);
 uint8_t* i2c_master_read(uint8_t* buffer, uint8_t length, uint8_t register_addr, uint8_t slave_addr, uint8_t read_flag);
 
-void lsm6ds0_get_acc(float* x, float* y, float* z);
+void lsm6ds0_get_acc(float* x, float* y, float* z); //accelerometer
 int16_t lsm6ds0_get_temp();// picsafust
 uint8_t lsm6ds0_init(void);
-uint8_t lsm6ds0_read_byte(uint8_t reg_addr);
-void lsm6ds0_write_byte(uint8_t reg_addr, uint8_t value);
-void lsm6ds0_readArray(uint8_t * data, uint8_t reg, uint8_t length);
+//uint8_t lsm6ds0_read_byte(uint8_t reg_addr);
+//void lsm6ds0_write_byte(uint8_t reg_addr, uint8_t value);
+//void lsm6ds0_readArray(uint8_t * data, uint8_t reg, uint8_t length);
 
-uint8_t hts221_init(void);
-uint8_t hts221_read_byte(uint8_t reg_addr);
-void hts221_write_byte(uint8_t reg_addr, uint8_t value);
-void hts221_readArray(uint8_t * data, uint8_t reg, uint8_t length);
-int16_t hts221_get_temp(void);
-int16_t hts221_get_hum(void);
+uint8_t hts221_init(void);	// humidity+temp meter
+//uint8_t hts221_read_byte(uint8_t reg_addr);
+//void hts221_write_byte(uint8_t reg_addr, uint8_t value);
+//void hts221_readArray(uint8_t * data, uint8_t reg, uint8_t length);
+int16_t hts221_get_temp(uint8_t avg_en);
+int16_t hts221_get_hum(uint8_t avg_en);
 
-uint8_t lps25hb_init(void);
-uint8_t lps25hb_read_byte(uint8_t reg_addr);
-void lps25hb_write_byte(uint8_t reg_addr, uint8_t value);
-void lps25hb_readArray(uint8_t * data, uint8_t reg, uint8_t length);
-uint32_t lps25hb_get_pressure(void);
+uint8_t lps25hb_init(void);	// barometer
+int32_t lps25hb_get_pressure(uint8_t avg_en);
+//uint8_t lps25hb_read_byte(uint8_t reg_addr);
+//void lps25hb_write_byte(uint8_t reg_addr, uint8_t value);
+//void lps25hb_readArray(uint8_t * data, uint8_t reg, uint8_t length);
+
+uint8_t lis3mdl_init(void);	// magnetometer
+void lis3mdl_get_azymuth(uint8_t avg_en);
+float get_gain_azymuth(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
 
 /* USER CODE END 0 */
 
@@ -161,7 +182,7 @@ int main(void)
 {
   /* USER CODE BEGIN 1 */
 	uint8_t temp=0;
-
+	//uint16_t ret_val=0;
 
   /* USER CODE END 1 */
 
@@ -203,9 +224,10 @@ int main(void)
 
 
 
-  temp=lsm6ds0_init();//accelerometer
+//  temp=lsm6ds0_init();//accelerometer
   temp=hts221_init();//humidity
   temp=lps25hb_init();//barometer
+  temp=lis3mdl_init();//magnetometer
   if (temp==0)
   	  {acc[0]=0.0;}
 
@@ -227,11 +249,11 @@ int main(void)
 	  }
 	  if (mode & shift_display){
 		  //get_temperature();
-		  lsm6ds0_get_acc(&acc[0],&acc[1],&acc[2]);
+		  //lsm6ds0_get_acc(&acc[0],&acc[1],&acc[2]);
 		  //ret_val=lsm6ds0_get_temp(); //picsafust
-		  ret_val=hts221_get_temp();	//fasza
-		  ret_val=hts221_get_hum();		//fasza
-		  lps25hb_get_pressure();
+		  //ret_val=hts221_get_temp(0xff);	//fasza
+		  //ret_val=hts221_get_hum(0xff);	//fasza
+
 		  if (mode & up_or_down){
 			  // up
 
@@ -251,7 +273,41 @@ int main(void)
 				  offset--;
 			  }
 		  }
+		  switch (what_to_measure){
+		  case 0:{ // magnitude == azymuth
+			  lis3mdl_get_azymuth(with_avg);
+			  // float to char
+			  float_to_char(azymuth,str,4, 3,1);
+			  break;}
+		  case 1:{ // temperature
+			  hts221_get_temp(with_avg);
+			  // float to char
+			  float_to_char(temperature,str,5, 2,1);
+			  break;}
+		  case 2: { // humidity
+			  hts221_get_hum(with_avg);
+			  // float to char
+			  float_to_char(humidity,str,4, 2,0);
+			  break;}
+		  case 3: { // pressure
+			  lps25hb_get_pressure(with_avg);
+			  // float to char
+			  float_to_char(pressure,str,4, 4,2);
+			  break;}
+		  case 4: { // altitude
+			  lps25hb_get_pressure(with_avg);
+			  hts221_get_temp(with_avg);
+			  calculate_altitude(with_avg);
+			  // float to char
+			  float_to_char(altitude,str,4, 4,1);
+			  break;}
 
+		  }
+		  hts221_get_temp(with_avg);			//fasza
+		  hts221_get_hum(with_avg);				//fasza
+		  lps25hb_get_pressure(with_avg);		//fasza
+		  calculate_altitude(with_avg);			//fasza
+		  lis3mdl_get_azymuth(with_avg);		//kerdeses
 
 		  //offset++;
 		  //LL_GPIO_TogglePin(led_GPIO_Port,led_Pin);
@@ -526,74 +582,221 @@ void push_button_pushed_fcn(void){
 	switch(what_to_measure){
 	case 0:{
 		//azymut [deg]: "MAG_xx.x"
-		my_str_cpy((uint8_t *) "MAG_00.0\0", str, &size_buff, max_buff_size);
+		my_str_cpy((uint8_t *) "MAG_000.0\0", str, &size_buff, max_buff_size);
 		convert_str_to_7seg(str, display_buffer_pa,display_buffer_pb,size_buff);
 		// to do: convert num 2 str to xx.x
-
+		lis3mdl_get_azymuth(with_avg);
+		// float to char
+		float_to_char(azymuth,str,4, 3,1);
 		break;}
 	case 1:{
 		//teplota [°C]: "TEMP_xx.x"
 		my_str_cpy((uint8_t *) "tEMP_00.0\0", str, &size_buff, max_buff_size);
 		convert_str_to_7seg(str, display_buffer_pa,display_buffer_pb,size_buff);
 		// to do: convert num 2 str to xx.x
-
+		hts221_get_temp(with_avg);
+		// float to char
+		float_to_char(temperature,str,5, 2,1);
 		break;}
 	case 2:{
 		//rel. vlhkosť [%]: "HUM_xx"
-		my_str_cpy((uint8_t *) "HUM_00.0\0", str, &size_buff, max_buff_size);
+		my_str_cpy((uint8_t *) "HUM_00\0", str, &size_buff, max_buff_size);
 		convert_str_to_7seg(str, display_buffer_pa,display_buffer_pb,size_buff);
 		// to do: convert num 2 str to xx.x
-
-
+		hts221_get_hum(with_avg);
+		// float to char
+		float_to_char(humidity,str,4, 2,0);
 		break;}
 	case 3:{
 		//tlak vzduchu [hPa]: "BAR_xxxx.xx"
-		my_str_cpy((uint8_t *) "bAr_0000.0\0", str, &size_buff, max_buff_size);
+		my_str_cpy((uint8_t *) "bAr_0000.00\0", str, &size_buff, max_buff_size);
 		convert_str_to_7seg(str, display_buffer_pa,display_buffer_pb,size_buff);
 		// to do: convert num 2 str to xx.x
-
+		lps25hb_get_pressure(with_avg);
+		// float to char
+		float_to_char(pressure,str,4, 4,2);
 		break;}
 	case 4:{
 		//nadmorská výška [m]: "ALT_xxxx.x"
 		my_str_cpy((uint8_t *) "ALt_0000.0\0", str, &size_buff, max_buff_size);
 		convert_str_to_7seg(str, display_buffer_pa,display_buffer_pb,size_buff);
 		// to do: convert num 2 str to xx.x
-
+		lps25hb_get_pressure(with_avg);
+		hts221_get_temp(with_avg);
+		calculate_altitude(with_avg);
+		// float to char
+		float_to_char(altitude,str,4, 4,1);
 		break;}
 	}
 
 }
+void while_loop_converse(uint8_t * result,uint32_t *number, uint32_t *mask){
+	while(*number>*mask){
+		*result +=1;
+		*number -= *mask;
+	}
+	*mask /=10;
+	*result +='0';
+}
 
-int16_t hts221_get_temp(){
+void float_to_char(float num,uint8_t *ptr,uint8_t pos, uint8_t num_of_decimals_before_DP,uint8_t num_of_decimals_after_DP){
+	uint8_t cnt,temp_2=1;uint32_t num_to_converse,mask=1;
+	uint16_t *p_pa,*p_pb;
+
+	//return;
+
+	for(cnt=0;cnt<num_of_decimals_after_DP;cnt++){
+		temp_2*=10;
+		mask*=10;
+	}
+	num=round(num*((float)temp_2));
+	num_to_converse=(uint32_t) num;
+	for(cnt=0;cnt<num_of_decimals_before_DP-1;cnt++){
+		mask*=10;
+	}
+
+	p_pa=&display_buffer_pa[pos];
+	p_pb=&display_buffer_pb[pos];
+	for(cnt=0;cnt<num_of_decimals_before_DP;cnt++){
+		temp_2=0;
+		while_loop_converse(&temp_2,&num_to_converse,&mask);
+		convert_char_to_7seg(temp_2,p_pa,p_pb);
+		p_pa+=1;p_pb+=1;
+	}
+	if (num_of_decimals_after_DP > 0)
+		{p_pa-=1;p_pb-=1;
+		*p_pb &= ~(seg_DP_pb_Pin );
+		p_pa+=1;p_pb+=1;
+		//convert_char_to_7seg('.',p_pa,p_pb);
+		//size_buff--;
+		}
+	for (cnt=0;cnt<num_of_decimals_after_DP;cnt++){
+		temp_2=0;
+		while_loop_converse(&temp_2,&num_to_converse,&mask);
+		convert_char_to_7seg(temp_2,p_pa,p_pb);
+		p_pa+=1;p_pb+=1;
+	}
+// to do .... complete
+}
+
+int16_t hts221_get_temp(uint8_t avg_en){
 	uint8_t data[2];int16_t raw;
-
-	hts221_readArray(data, hts221_ADDRESS_TEMP_L, 2);
+	float temp;
+	//hts221_readArray(data, hts221_ADDRESS_TEMP_L, 2);
+	i2c_master_read(data, 2, hts221_ADDRESS_TEMP_L, hts221_DEVICE_ADDRESS_read, 1);
 	raw= (int16_t)((uint16_t)data[0]+((uint16_t)data[1])*256);
 
 	if (raw>32767)
 		raw-=65536;
 
-	temperature= ((T1 - T0) / 8.0) * (raw - T2) / (T3 - T2) + (T0 / 8.0);
+	temp= ((H_T_uint16_t[3] - H_T_uint16_t[2]) / 8.0) * (raw - H_T_uint16_t[4]) / (H_T_uint16_t[5] - H_T_uint16_t[4]) + (H_T_uint16_t[2] / 8.0);
+	//temperature= ((T1 - T0) / 8.0) * (raw - T2) / (T3 - T2) + (T0 / 8.0);
+	if(avg_en){
+		temperature=(temperature+temp)/2.0;
+	}else{
+		temperature=temp;
+	}
 	return(raw);
 }
 
-int16_t hts221_get_hum(){
+int16_t hts221_get_hum(uint8_t avg_en){
 	uint8_t data[2];int16_t raw;
-
-	hts221_readArray(data, hts221_ADDRESS_HUM_L, 2);
+	float temp;
+	//hts221_readArray(data, hts221_ADDRESS_HUM_L, 2);
+	i2c_master_read(data, 2,  hts221_ADDRESS_HUM_L, hts221_DEVICE_ADDRESS_read, 1);
 	raw= (int16_t)((uint16_t)data[0]+((uint16_t)data[1])*256);
 
-	humidity= ((1.0 * H1) - (1.0 * H0)) * (1.0 * raw - 1.0 * H2) / (1.0 * H3 - 1.0 * H2) + (1.0 * H0);
+	//humidity=       ((1.0 * H1) - (1.0 * H0        )) * (1.0 * raw - 1.0 * H2             ) / (1.0 * H3 - 1.0 * H2             ) + (1.0 * H0        );
+	temp=       ((1.0 * H_uint8[1]) - (1.0 * H_uint8[0]        )) * (1.0 * raw - 1.0 * H_T_uint16_t[0]             ) / (1.0 * H_T_uint16_t[1] - 1.0 * H_T_uint16_t[0]             ) + (1.0 * H_uint8[0]        );
+	if (avg_en){
+		humidity=(temp+humidity)/2.0;
+	}else{
+		humidity=temp;
+	}
 	return(raw);
 }
 
-uint32_t lps25hb_get_pressure(void){
-	uint8_t data[3];uint32_t ret_val;
-	//hts221_readArray(&data[0], lps25hb_ADDRESS_pres_L, 3);
-	i2c_master_read(&data[0], 3, lps25hb_ADDRESS_pres_L, hts221_DEVICE_ADDRESS_read, 1);
-	ret_val=(uint32_t)(data[0]&0xff)+((uint32_t)(data[1]&0xff))*256+((uint32_t)(data[2]&0xff))*256*256;
-	pressure=(pressure+ret_val/(4096.0*1.0))/2.0;
+int32_t lps25hb_get_pressure(uint8_t avg_en){
+	uint8_t data[3];int32_t ret_val;
+	//lps25hb_readArray(&data[0], lps25hb_ADDRESS_pres_L, 3);
+	i2c_master_read(&data[0], 3, lps25hb_ADDRESS_pres_L, lps25hb_DEVICE_ADDRESS_read, 1);
+	ret_val=(int32_t)((uint32_t)(data[0]&0xff)+((uint32_t)(data[1]&0xff))*256+((uint32_t)(data[2]&0xff))*256*256);
+	//pressure=(pressure+ret_val/(4096.0*1.0))/2.0;
+	if (avg_en){
+		pressure=(pressure+ret_val/4096.0)/2.0;
+	}
+	else{
+		pressure=ret_val/4096.0;
+	}
+
 	return(ret_val);
+}
+
+void lis3mdl_get_azymuth(uint8_t avg_en){
+	//uint8_t data[4];int16_t x,y;float X,Y,temp;
+	uint8_t data[4];int16_t x,y;float temp;
+	i2c_master_read(data, 4, lis3mdl_ADDRESS_X, lis3mdl_DEVICE_ADDRESS_read, 1);
+
+	x=(int16_t)((uint16_t)data[0]+((uint16_t)data[1])*256);
+	y=(int16_t)((uint16_t)data[2]+((uint16_t)data[3])*256);
+
+	//X=x*azymuth_gain;
+	//Y=y*azymuth_gain;
+
+	//temp=atan2(Y,X)*180.0/M_PI;
+	if (x!=0){
+		temp=atan(((float)y*1.0f)/((float)x*1.0f))*(180/M_PI);
+		//temp=atan2(((float)y*1.0f),((float)x*1.0f))*(180/M_PI);
+		if ((y>=0 ) && (x<0)) // second quadrant
+			temp+=180.0;
+		if ((y<0 ) && (x<0))	// third quadrant
+			temp-=180.0;
+	}else{
+		if(y>0){
+			temp=90.0;
+		}else{
+			temp=-90.0;
+		}
+	}
+	if (temp>=0.0){
+		//positive
+		while(temp>=360.0){
+			temp-=360;
+			}
+		}else{
+		//negative
+		while(temp<=0.0){
+			temp+=360.0;
+			}
+		}
+
+	if (avg_en){
+		azymuth=(temp+azymuth)/2.0;
+	}else{
+		azymuth=temp;}
+
+}
+
+float get_gain_azymuth(void){
+	uint8_t data;
+	i2c_master_read(&data, 1,0x21 , lis3mdl_DEVICE_ADDRESS_read, 1);
+	data &=60;
+
+	if (data == 0x00){
+		//azymuth_gain=;
+		return(4.0f/32768.0f);
+	}
+	if (data == 0x20){
+		//azymuth_gain=(8.0/32768.0);
+		return(8.0f/32768.0f);
+	}
+	if (data == 0x40){
+		//azymuth_gain=(12.0/32768.0);
+		return(12.0f/32768.0f);
+	}
+	//if (data == 0x60){
+	return(16.0f/32768.0f);
+	//}
 }
 
 void lsm6ds0_get_acc(float* x, float* y, float* z)
@@ -604,12 +807,13 @@ void lsm6ds0_get_acc(float* x, float* y, float* z)
 	uint8_t temp;
 
 	//get current scale and use it for final calculation
-    temp = lsm6ds0_read_byte(LSM6DS0_ADDRESS_CTRL1);
-
+    //temp = lsm6ds0_read_byte(LSM6DS0_ADDRESS_CTRL1);
+    i2c_master_read(&temp, 1, LSM6DS0_ADDRESS_CTRL1, LSM6DS0_DEVICE_ADDRESS_read, 0);
 	temp = temp >> 2;
     temp &= 0x03;			//full scale bits exctracted
 
-	lsm6ds0_readArray(data, LSM6DS0_ADDRESS_ACCX, 6);
+//	lsm6ds0_readArray(data, LSM6DS0_ADDRESS_ACCX, 6);
+    i2c_master_read(data, 6, LSM6DS0_ADDRESS_ACCX, LSM6DS0_DEVICE_ADDRESS_read, 1);
 
 	xx = ((uint16_t)data[1]) << 8 | data[0];
 	yy = ((uint16_t)data[3]) << 8 | data[2];
@@ -623,78 +827,79 @@ void lsm6ds0_get_acc(float* x, float* y, float* z)
 int16_t lsm6ds0_get_temp()
 {
 	uint8_t temp[2];
-	lsm6ds0_readArray(temp, LSM6DS0_ADDRESS_TEMP_L, 2);
+//	lsm6ds0_readArray(temp, LSM6DS0_ADDRESS_TEMP_L, 2);
+	i2c_master_read(temp, 2, LSM6DS0_ADDRESS_TEMP_L, LSM6DS0_DEVICE_ADDRESS_read, 1);
 
 	return (((int16_t)((temp[1] << 8) | temp[0])) >> 3)  + 25;
 }
 
-uint8_t lsm6ds0_read_byte(uint8_t reg_addr){
-	uint8_t data = 0;
+//uint8_t lsm6ds0_read_byte(uint8_t reg_addr){
+//	uint8_t data = 0;
 //#define 	LSM6DS0_DEVICE_ADDRESS_write			0xD4
 //#define 	LSM6DS0_DEVICE_ADDRESS_read				0xD6
-	return *(i2c_master_read(&data, 1, reg_addr, LSM6DS0_DEVICE_ADDRESS_read, 0));
-}
+//	return *(i2c_master_read(&data, 1, reg_addr, LSM6DS0_DEVICE_ADDRESS_read, 0));
+//}
 
-uint8_t hts221_read_byte(uint8_t reg_addr){
-	uint8_t data = 0;
+//uint8_t hts221_read_byte(uint8_t reg_addr){
+//	uint8_t data = 0;
 //#define hts221_DEVICE_ADDRESS_write	0xBE
 //#define hts221_DEVICE_ADDRESS_read	0xBF
-	return *(i2c_master_read(&data, 1, reg_addr,hts221_DEVICE_ADDRESS_read , 0));
-}
+//	return *(i2c_master_read(&data, 1, reg_addr,hts221_DEVICE_ADDRESS_read , 0));
+//}
 
-uint8_t lps25hb_read_byte(uint8_t reg_addr){
-	uint8_t data = 0;
-	//#define lps25hb_DEVICE_ADDRESS_write	0xBA	//barometer+temp
-	//#define lps25hb_DEVICE_ADDRESS_read		0xBB
-	return *(i2c_master_read(&data, 1, reg_addr,lps25hb_DEVICE_ADDRESS_read , 0));
-}
-
-void hts221_write_byte(uint8_t reg_addr, uint8_t value){
-//#define hts221_DEVICE_ADDRESS_write	0xBE
-//#define hts221_DEVICE_ADDRESS_read	0xBF
-	i2c_master_write(value, reg_addr,hts221_DEVICE_ADDRESS_write , 0);
-}
-
-void lps25hb_write_byte(uint8_t reg_addr, uint8_t value){
+//uint8_t lps25hb_read_byte(uint8_t reg_addr){
+//	uint8_t data = 0;
 //#define lps25hb_DEVICE_ADDRESS_write	0xBA	//barometer+temp
 //#define lps25hb_DEVICE_ADDRESS_read		0xBB
-	i2c_master_write(value, reg_addr,lps25hb_DEVICE_ADDRESS_write , 0);
-}
+//	return *(i2c_master_read(&data, 1, reg_addr,lps25hb_DEVICE_ADDRESS_read , 0));
+//}
 
-void lsm6ds0_write_byte(uint8_t reg_addr, uint8_t value){
+//void hts221_write_byte(uint8_t reg_addr, uint8_t value){
+//#define hts221_DEVICE_ADDRESS_write	0xBE
+//#define hts221_DEVICE_ADDRESS_read	0xBF
+//	i2c_master_write(value, reg_addr,hts221_DEVICE_ADDRESS_write , 0);
+//}
+
+//void lps25hb_write_byte(uint8_t reg_addr, uint8_t value){
+//#define lps25hb_DEVICE_ADDRESS_write	0xBA	//barometer+temp
+//#define lps25hb_DEVICE_ADDRESS_read		0xBB
+//	i2c_master_write(value, reg_addr,lps25hb_DEVICE_ADDRESS_write , 0);
+//}
+
+//void lsm6ds0_write_byte(uint8_t reg_addr, uint8_t value){
 //#define 	LSM6DS0_DEVICE_ADDRESS_write			0xD4
 //#define 	LSM6DS0_DEVICE_ADDRESS_read				0xD6
-	i2c_master_write(value, reg_addr, LSM6DS0_DEVICE_ADDRESS_write, 0);
-}
+//	i2c_master_write(value, reg_addr, LSM6DS0_DEVICE_ADDRESS_write, 0);
+//}
 
-void hts221_readArray(uint8_t * data, uint8_t reg, uint8_t length){
-	//#define hts221_DEVICE_ADDRESS_write	0xBE
-	//#define hts221_DEVICE_ADDRESS_read	0xBF
-	i2c_master_read(data, length, reg, hts221_DEVICE_ADDRESS_read, 1);
-}
+//void hts221_readArray(uint8_t * data, uint8_t reg, uint8_t length){
+//#define hts221_DEVICE_ADDRESS_write	0xBE
+//#define hts221_DEVICE_ADDRESS_read	0xBF
+//	i2c_master_read(data, length, reg, hts221_DEVICE_ADDRESS_read, 1);
+//}
 
-void lsm6ds0_readArray(uint8_t * data, uint8_t reg, uint8_t length){
+//void lsm6ds0_readArray(uint8_t * data, uint8_t reg, uint8_t length){
 //#define 	LSM6DS0_DEVICE_ADDRESS_write			0xD4
 //#define 	LSM6DS0_DEVICE_ADDRESS_read				0xD6
-	i2c_master_read(data, length, reg, LSM6DS0_DEVICE_ADDRESS_read, 1);
-}
+//	i2c_master_read(data, length, reg, LSM6DS0_DEVICE_ADDRESS_read, 1);
+//}
 
-void lps25hb_readArray(uint8_t * data, uint8_t reg, uint8_t length){
-	//#define lps25hb_DEVICE_ADDRESS_write	0xBA	//barometer+temp
-	//#define lps25hb_DEVICE_ADDRESS_read		0xBB
-	i2c_master_read(data, length, reg, lps25hb_DEVICE_ADDRESS_read, 1);
-}
+//void lps25hb_readArray(uint8_t * data, uint8_t reg, uint8_t length){
+//#define lps25hb_DEVICE_ADDRESS_write	0xBA	//barometer+temp
+//#define lps25hb_DEVICE_ADDRESS_read		0xBB
+//	i2c_master_read(data, length, reg, lps25hb_DEVICE_ADDRESS_read, 1);
+//}
 
-uint8_t lsm6ds0_init(void)
+uint8_t lsm6ds0_init(void)// accelerometer
 {
-	uint8_t status = 0,cnt;
+	uint8_t status = 0,cnt,val;
 
 		//LIS3MDL_ACC_ON;
 	for (cnt=0;cnt<max_try_to_inicialize_whoami;cnt++){
 		LL_mDelay(100);
 
-		uint8_t val = lsm6ds0_read_byte(WHO_AM_I_ADDRES);
-
+		//uint8_t val = lsm6ds0_read_byte(WHO_AM_I_ADDRES);
+		i2c_master_read(&val, 1, WHO_AM_I_ADDRES, LSM6DS0_DEVICE_ADDRESS_read, 0);
 		if(val == LSM6DS0_WHO_AM_I_VALUE)
 		{
 			status = 1;
@@ -706,16 +911,18 @@ uint8_t lsm6ds0_init(void)
 		//acc device init
 
 		uint8_t ctrl1 = 8 << 4; // +-2g res
-		lsm6ds0_write_byte(LSM6DS0_ADDRESS_CTRL1, ctrl1);
+		//lsm6ds0_write_byte(LSM6DS0_ADDRESS_CTRL1, ctrl1);
+		i2c_master_write(ctrl1, LSM6DS0_ADDRESS_CTRL1, LSM6DS0_DEVICE_ADDRESS_write, 0);
 
 		return status;
 }
 
-uint8_t hts221_init(void){
+uint8_t hts221_init(void){//humidity
 	uint8_t status = 0,data[6],val=0,cnt=0;
 	for (cnt=0;cnt<max_try_to_inicialize_whoami;cnt++){
 		LL_mDelay(100);
-		val = hts221_read_byte(WHO_AM_I_ADDRES);
+		//val = hts221_read_byte(WHO_AM_I_ADDRES);
+		i2c_master_read(&val, 1, WHO_AM_I_ADDRES,hts221_DEVICE_ADDRESS_read , 0);
 		//if the device is not found on one address, try another one
 		if(val == hts221_WHO_AM_I_VALUE){
 			status = 1;
@@ -726,44 +933,68 @@ uint8_t hts221_init(void){
 //#define hts221_av_conf				0x10 //1b
 //#define hts221_crtl_reg_1 			0x20 //0x85
 	val=0x1b;
-	hts221_write_byte(hts221_av_conf, val);
+	//hts221_write_byte(hts221_av_conf, val);
+	i2c_master_write(val, hts221_av_conf,hts221_DEVICE_ADDRESS_write , 0);
 	val=0x85;
-	hts221_write_byte(hts221_crtl_reg_1, val);
+	//hts221_write_byte(hts221_crtl_reg_1, val);
+	i2c_master_write(val, hts221_crtl_reg_1,hts221_DEVICE_ADDRESS_write , 0);
 	LL_mDelay(100);
 // hts221 calibration register values
 //uint8_t H0,H1;//0x30,0x31,0x32,0x33
 //int16_t H2,H3,T0,T1,T2,T3;//[36-37:msb],[3a-3b:msb],[3c-3d:msb],[3e-3f:msb]
 
-	hts221_readArray(&data[0], 0x30, 4);
-	H0=data[0]/2;	//30
-	H1=data[1]/2;	//31
-	T0=data[2];	//32
-	T1=data[3];	//33
+	//hts221_readArray(&data[0], 0x30, 4);
+	i2c_master_read(data, 4, 0x30, hts221_DEVICE_ADDRESS_read, 1);
+	//H0=data[0]/2;	//30
+	H_uint8[0]=data[0]/2;	//30
+	//H1=data[1]/2;	//31
+	H_uint8[1]=data[1]/2;	//31
 
-	hts221_readArray(&data[0], 0x36, 2);
-	H2=(int16_t)( (uint16_t)data[0]+((uint16_t)data[1])*256 );//[36-37]
+	//T0=data[2];	//32
+	H_T_uint16_t[2]=data[2];	//32
+	//T1=data[3];	//33
+	H_T_uint16_t[3]=data[3];	//33
 
-	hts221_readArray(&data[0], 0x3a, 2);
-	H3=(int16_t)( (uint16_t)data[0]+((uint16_t)data[1])*256 );//[3a-3b]
 
-	val=hts221_read_byte(0x35);
-	T0=((val & 0x3)*256)+T0;
-	T1=((val & 0xc)*64)+T1;
+	//hts221_readArray(&data[0], 0x36, 2);
+	i2c_master_read(data, 2, 0x36, hts221_DEVICE_ADDRESS_read, 1);
+	H_T_uint16_t[0]=(int16_t)( (uint16_t)data[0]+((uint16_t)data[1])*256 );//[36-37]
+	//H2=(int16_t)( (uint16_t)data[0]+((uint16_t)data[1])*256 );//[36-37]
 
-	hts221_readArray(&data[0], 0x3c, 4);
-	T2= (int16_t)( ((uint16_t)data[1])*256+(uint16_t)data[0] );//[3c-3d]
-	T3= (int16_t)( ((uint16_t)data[3])*256+(uint16_t)data[2] );//3e-3f
+	//hts221_readArray(&data[0], 0x3a, 2);
+	i2c_master_read(data, 2, 0x3a, hts221_DEVICE_ADDRESS_read, 1);
+	H_T_uint16_t[1]=(int16_t)( (uint16_t)data[0]+((uint16_t)data[1])*256 );//[3a-3b]
+	//H3=(int16_t)( (uint16_t)data[0]+((uint16_t)data[1])*256 );//[3a-3b]
+
+	//val=hts221_read_byte(0x35);
+	i2c_master_read(&val, 1, 0x35,hts221_DEVICE_ADDRESS_read , 0);
+	H_T_uint16_t[2]=((val & 0x3)*256)+H_T_uint16_t[2];
+	//T0=((val & 0x3)*256)+T0;
+	H_T_uint16_t[3]=((val & 0xc)*64)+H_T_uint16_t[3];
+	//T1=((val & 0xc)*64)+T1;
+
+
+	//hts221_readArray(&data[0], 0x3c, 4);
+	i2c_master_read(data, 4, 0x3c, hts221_DEVICE_ADDRESS_read, 1);
+	//T2= (int16_t)( ((uint16_t)data[1])*256+(uint16_t)data[0] );//[3c-3d]
+	H_T_uint16_t[4]= (int16_t)( ((uint16_t)data[1])*256+(uint16_t)data[0] );//[3c-3d]
+	//T3= (int16_t)( ((uint16_t)data[3])*256+(uint16_t)data[2] );//3e-3f
+	H_T_uint16_t[5]= (int16_t)( ((uint16_t)data[3])*256+(uint16_t)data[2] );//3e-3f
+
+	hts221_get_temp(whitout_avg);	//fasza
+	hts221_get_hum(whitout_avg);		//fasza
 
 	return(status);
 }
 
-uint8_t lps25hb_init(void)
+uint8_t lps25hb_init(void)//barometer
 {
-	uint8_t status = 0,val=0,cnt;
+	uint8_t status = 0,val,cnt;//,data[3];int32_t temp;
 	//LIS3MDL_ACC_ON;
 	for (cnt=0;cnt<max_try_to_inicialize_whoami;cnt++){
 		LL_mDelay(100);
-		val = lps25hb_read_byte(WHO_AM_I_ADDRES);
+		//val = lps25hb_read_byte(WHO_AM_I_ADDRES);
+		i2c_master_read(&val, 1, WHO_AM_I_ADDRES,lps25hb_DEVICE_ADDRESS_read , 0);
 		//if the device is not found on one address, try another one
 		if(val == lps25hb_WHO_AM_I_VALUE){
 			//if the device is founded on one address
@@ -771,15 +1002,58 @@ uint8_t lps25hb_init(void)
 			break;}
 		}
 	val = 0x90;//90
-	lps25hb_write_byte(lps25hb_crtl_reg_1, val);
+	//lps25hb_write_byte(lps25hb_crtl_reg_1, val);
+	i2c_master_write(val, lps25hb_crtl_reg_1,lps25hb_DEVICE_ADDRESS_write , 0);
+
 	/*val=0x0f;
-	lps25hb_write_byte(0x10, val);
+	//lps25hb_write_byte(0x10, val);
+	i2c_master_write(val, 0x10,lps25hb_DEVICE_ADDRESS_write , 0);
 	val=52;
-	lps25hb_write_byte(0x21, val);
+	//lps25hb_write_byte(0x21, val);
+	i2c_master_write(val, 0x21,lps25hb_DEVICE_ADDRESS_write , 0);
 	val=0xdf;
-	lps25hb_write_byte(0x2e, val);
-	*/
+	//lps25hb_write_byte(0x2e, val);
+	i2c_master_write(val, 0x2e,lps25hb_DEVICE_ADDRESS_write , 0);
+	 */
+
 	LL_mDelay(100);
+
+	lps25hb_get_pressure(whitout_avg);
+
+	calculate_altitude(whitout_avg);
+	return status;
+}
+
+uint8_t lis3mdl_init(void){// magnetometer
+	uint8_t status = 0,val,cnt;//,data[3];int32_t temp;
+	//LIS3MDL_ACC_ON;
+	for (cnt=0;cnt<max_try_to_inicialize_whoami;cnt++){
+		LL_mDelay(100);
+		//val = lis3mdl_read_byte(WHO_AM_I_ADDRES);
+		i2c_master_read(&val, 1, WHO_AM_I_ADDRES,lis3mdl_DEVICE_ADDRESS_read , 0);
+		//if the device is not found on one address, try another one
+		if(val == lis3mdl_WHO_AM_I_VALUE){
+			//if the device is founded on one address
+			status = 1;
+			break;}
+		}
+	//val = 0x64;//90
+	val=0xfc;
+	//lis3mdl_write_byte(lis3mdl_crtl_reg_1, val);
+	i2c_master_write(val, lis3mdl_ADDRESS_CTRL1,lis3mdl_DEVICE_ADDRESS_write , 0);
+	val = 0x00;// +-4 gauss
+	i2c_master_write(val, 0x21,lis3mdl_DEVICE_ADDRESS_write , 0);
+	val = 0x00;// continous measure
+	i2c_master_write(val, 0x22,lis3mdl_DEVICE_ADDRESS_write , 0);
+	val = 0x0c;// power mode
+	i2c_master_write(val, 0x23,lis3mdl_DEVICE_ADDRESS_write , 0);
+	//val = 0x00;// fast reading dis
+	//i2c_master_write(val, 0x24,lis3mdl_DEVICE_ADDRESS_write , 0);
+	LL_mDelay(100);
+
+	//azymuth_gain=get_gain_azymuth();
+
+	lis3mdl_get_azymuth(whitout_avg);
 	return status;
 }
 
@@ -856,219 +1130,238 @@ void my_str_cpy(uint8_t * from, uint8_t * to, uint16_t *copied, uint16_t max){
 	}
 }
 
+void convert_char_to_7seg(uint8_t ch,uint16_t *pa,uint16_t *pb){
+	*pa=0xffff & ~( dig_1_pa_Pin | dig_2_pa_Pin | dig_3_pa_Pin | dig_time_pa_Pin);
+	*pb=0xffff & ~(dig_0_pb_Pin | dig_0_pb_Pin);//& ~(LL_GPIO_PIN_5 | LL_GPIO_PIN_6);
+	switch(ch){
+				case '0':{
+					*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin | seg_C_pa_Pin | seg_E_pa_Pin | seg_F_pa_Pin);
+					*pb &= ~(seg_D_pb_Pin);
+					break;}
+				case '1':{
+					*pa&=~(seg_B_pa_Pin | seg_C_pa_Pin);
+					break;}
+				case '2':{
+					*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin | seg_E_pa_Pin );
+					*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
+					break;}
+				case '3':{
+					*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin | seg_C_pa_Pin );
+					*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
+					break;}
+				case '4':{
+					*pa &= ~( seg_B_pa_Pin | seg_C_pa_Pin | seg_F_pa_Pin);
+					*pb &= ~( seg_G_pb_Pin );
+					break;}
+				case '5':{
+					*pa &= ~(seg_A_pa_Pin | seg_C_pa_Pin | seg_F_pa_Pin);
+					*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
+					break;}
+				case '6':{
+					*pa &= ~(seg_A_pa_Pin | seg_C_pa_Pin | seg_E_pa_Pin | seg_F_pa_Pin);
+					*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
+					break;}
+				case '7':{
+					*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin | seg_C_pa_Pin );
+					break;}
+				case '8':{
+					*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin | seg_C_pa_Pin | seg_E_pa_Pin | seg_F_pa_Pin);
+					*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
+					break;}
+				case '9':{
+					*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin | seg_C_pa_Pin | seg_F_pa_Pin);
+					*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
+					break;}
+
+				case 'A':{
+					*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin | seg_C_pa_Pin | seg_E_pa_Pin | seg_F_pa_Pin);
+					*pb &= ~( seg_G_pb_Pin);
+					break;}
+				case 'a':{
+					*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin | seg_C_pa_Pin | seg_E_pa_Pin );
+					*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
+					break;}
+				case 'b':{
+					*pa &= ~( seg_C_pa_Pin | seg_E_pa_Pin | seg_F_pa_Pin);
+					*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
+					break;}
+				case 'C':{
+					*pa &= ~(seg_A_pa_Pin | seg_E_pa_Pin | seg_F_pa_Pin);
+					*pb &= ~(seg_D_pb_Pin );
+					break;}
+				case 'c':{
+					*pa &= ~( seg_E_pa_Pin );
+					*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
+					break;}
+				case 'd':{
+					*pa &= ~( seg_B_pa_Pin | seg_C_pa_Pin | seg_E_pa_Pin );
+					*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
+					break;}
+				case 'E':{
+					*pa &= ~(seg_A_pa_Pin | seg_E_pa_Pin | seg_F_pa_Pin);
+					*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
+					break;}
+				case 'F':{
+					*pa &= ~(seg_A_pa_Pin |  seg_E_pa_Pin | seg_F_pa_Pin);
+					*pb &= ~( seg_G_pb_Pin);
+					break;}
+				case 'G':{
+					*pa &= ~(seg_A_pa_Pin |  seg_C_pa_Pin | seg_E_pa_Pin | seg_F_pa_Pin);
+					*pb &= ~(seg_D_pb_Pin );
+					break;}
+				case 'H':{
+					*pa &= ~(seg_B_pa_Pin | seg_C_pa_Pin | seg_E_pa_Pin | seg_F_pa_Pin);
+					*pb &= ~( seg_G_pb_Pin);
+					break;}
+				case 'h':{
+					*pa &= ~( seg_C_pa_Pin | seg_E_pa_Pin | seg_F_pa_Pin);
+					*pb &= ~( seg_G_pb_Pin);
+					break;}
+				case 'I':{
+					*pa &= ~( seg_E_pa_Pin | seg_F_pa_Pin);
+					// *pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
+					break;}
+				case 'J':{
+					*pa &= ~( seg_B_pa_Pin | seg_C_pa_Pin | seg_E_pa_Pin );
+					*pb &= ~(seg_D_pb_Pin );
+					break;}
+				case 'L':{
+					*pa &= ~(seg_E_pa_Pin | seg_F_pa_Pin);
+					*pb &= ~(seg_D_pb_Pin );
+					break;}
+				case 'n':{
+					*pa &= ~( seg_C_pa_Pin | seg_E_pa_Pin );
+					*pb &= ~( seg_G_pb_Pin);
+					break;}
+				case 'O':{
+					*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin | seg_C_pa_Pin | seg_E_pa_Pin | seg_F_pa_Pin);
+					*pb &= ~(seg_D_pb_Pin );
+					break;}
+				case 'o':{
+					*pa &= ~( seg_C_pa_Pin | seg_E_pa_Pin );
+					*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
+					break;}
+				case 'P':{
+					*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin  | seg_E_pa_Pin | seg_F_pa_Pin);
+					*pb &= ~( seg_G_pb_Pin);
+					break;}
+				case 'q':{
+					*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin | seg_C_pa_Pin | seg_F_pa_Pin);
+					*pb &= ~( seg_G_pb_Pin);
+					break;}
+				case 'r':{
+					*pa &= ~( seg_E_pa_Pin );
+					*pb &= ~(seg_G_pb_Pin);
+					break;}
+				case 'S':{
+					*pa &= ~(seg_A_pa_Pin | seg_C_pa_Pin  | seg_F_pa_Pin);
+					*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
+					break;}
+				case 't':{
+					*pa &= ~( seg_E_pa_Pin | seg_F_pa_Pin);
+					*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
+					break;}
+				case 'U':{
+					*pa &= ~(  seg_B_pa_Pin | seg_C_pa_Pin | seg_E_pa_Pin | seg_F_pa_Pin);
+					*pb &= ~(seg_D_pb_Pin );
+					break;}
+				case 'u':{
+					*pa &= ~( seg_C_pa_Pin | seg_E_pa_Pin );
+					*pb &= ~(seg_D_pb_Pin );
+					break;}
+				case 'y':{
+					*pa &= ~( seg_B_pa_Pin | seg_C_pa_Pin  | seg_F_pa_Pin);
+					*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
+					break;}
+
+				//specials:
+				case 'K':{
+					*pa &= ~(seg_A_pa_Pin | seg_C_pa_Pin | seg_E_pa_Pin | seg_F_pa_Pin);
+					*pb &= ~(seg_G_pb_Pin);
+					break;}
+				case 'M':{
+					*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin | seg_F_pa_Pin);
+					*pb &= ~(seg_D_pb_Pin );
+					break;}
+				case 'V':{
+					*pa &= ~( seg_B_pa_Pin |   seg_F_pa_Pin);
+					*pb &= ~(seg_D_pb_Pin );
+					break;}
+				case 'W':{
+					*pa &= ~( seg_B_pa_Pin | seg_C_pa_Pin | seg_E_pa_Pin | seg_F_pa_Pin);
+					*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
+					break;}
+				case 'X':{
+					*pa &= ~(seg_A_pa_Pin  );
+					*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
+					break;}
+				case 'Z':{
+					*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin    | seg_E_pa_Pin);
+					*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
+					break;}
+				case '_':{
+					//*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin    | seg_E_pa_Pin);
+					*pb &= ~(seg_D_pb_Pin );
+					break;}
+				case '-':{
+					//*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin    | seg_E_pa_Pin);
+					*pb &= ~(seg_G_pb_Pin );
+					break;}
+				case '.':{
+					//pb -=1;pa-=1;//
+					//*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin    | seg_E_pa_Pin);
+					*pb &= ~(seg_DP_pb_Pin );
+					break;}
+				default:
+					*pb &=~seg_DP_pb_Pin;
+				// specials:
+				/*case 'm':{
+					*pa &= ~( seg_C_pa_Pin | seg_E_pa_Pin );
+					*pb &= ~( seg_G_pb_Pin | seg_DP_pb_Pin);
+
+					pa+=1;pb+=1;
+					*pa=0xffff & ~(dig_0_pa_Pin | dig_1_pa_Pin | dig_2_pa_Pin | dig_3_pa_Pin | dig_time_pa_Pin);
+					*pb=0xffff;
+
+					*pa &= ~( seg_C_pa_Pin | seg_E_pa_Pin );
+					*pb &= ~( seg_G_pb_Pin );
+					break;}
+				case 'x':{
+					*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin | seg_C_pa_Pin | seg_E_pa_Pin | seg_F_pa_Pin);
+					*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin | seg_DP_pb_Pin);
+
+					pa+=1;pb+=1;
+					*pa=0xffff & ~(dig_0_pa_Pin | dig_1_pa_Pin | dig_2_pa_Pin | dig_3_pa_Pin | dig_time_pa_Pin);
+					*pb=0xffff;
+					*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin | seg_C_pa_Pin | seg_E_pa_Pin | seg_F_pa_Pin);
+									*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
+
+				}*/
+
+
+			}
+
+}
+
 void convert_str_to_7seg(uint8_t *from, uint16_t *pa,uint16_t *pb,uint16_t max){
 	uint16_t cnt=0;//,mask_a=0,mask_b=0;
 	for (cnt=0;cnt<max;cnt++){
-		*pa=0xffff & ~( dig_1_pa_Pin | dig_2_pa_Pin | dig_3_pa_Pin | dig_time_pa_Pin);
-		*pb=0xffff & ~(dig_0_pb_Pin | dig_0_pb_Pin);//& ~(LL_GPIO_PIN_5 | LL_GPIO_PIN_6);
-		switch(*from){
-			case '0':{
-				*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin | seg_C_pa_Pin | seg_E_pa_Pin | seg_F_pa_Pin);
-				*pb &= ~(seg_D_pb_Pin);
-				break;}
-			case '1':{
-				*pa&=~(seg_B_pa_Pin | seg_C_pa_Pin);
-				break;}
-			case '2':{
-				*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin | seg_E_pa_Pin );
-				*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
-				break;}
-			case '3':{
-				*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin | seg_C_pa_Pin );
-				*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
-				break;}
-			case '4':{
-				*pa &= ~( seg_B_pa_Pin | seg_C_pa_Pin | seg_F_pa_Pin);
-				*pb &= ~( seg_G_pb_Pin );
-				break;}
-			case '5':{
-				*pa &= ~(seg_A_pa_Pin | seg_C_pa_Pin | seg_F_pa_Pin);
-				*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
-				break;}
-			case '6':{
-				*pa &= ~(seg_A_pa_Pin | seg_C_pa_Pin | seg_E_pa_Pin | seg_F_pa_Pin);
-				*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
-				break;}
-			case '7':{
-				*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin | seg_C_pa_Pin );
-				break;}
-			case '8':{
-				*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin | seg_C_pa_Pin | seg_E_pa_Pin | seg_F_pa_Pin);
-				*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
-				break;}
-			case '9':{
-				*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin | seg_C_pa_Pin | seg_F_pa_Pin);
-				*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
-				break;}
-
-			case 'A':{
-				*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin | seg_C_pa_Pin | seg_E_pa_Pin | seg_F_pa_Pin);
-				*pb &= ~( seg_G_pb_Pin);
-				break;}
-			case 'a':{
-				*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin | seg_C_pa_Pin | seg_E_pa_Pin );
-				*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
-				break;}
-			case 'b':{
-				*pa &= ~( seg_C_pa_Pin | seg_E_pa_Pin | seg_F_pa_Pin);
-				*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
-				break;}
-			case 'C':{
-				*pa &= ~(seg_A_pa_Pin | seg_E_pa_Pin | seg_F_pa_Pin);
-				*pb &= ~(seg_D_pb_Pin );
-				break;}
-			case 'c':{
-				*pa &= ~( seg_E_pa_Pin );
-				*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
-				break;}
-			case 'd':{
-				*pa &= ~( seg_B_pa_Pin | seg_C_pa_Pin | seg_E_pa_Pin );
-				*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
-				break;}
-			case 'E':{
-				*pa &= ~(seg_A_pa_Pin | seg_E_pa_Pin | seg_F_pa_Pin);
-				*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
-				break;}
-			case 'F':{
-				*pa &= ~(seg_A_pa_Pin |  seg_E_pa_Pin | seg_F_pa_Pin);
-				*pb &= ~( seg_G_pb_Pin);
-				break;}
-			case 'G':{
-				*pa &= ~(seg_A_pa_Pin |  seg_C_pa_Pin | seg_E_pa_Pin | seg_F_pa_Pin);
-				*pb &= ~(seg_D_pb_Pin );
-				break;}
-			case 'H':{
-				*pa &= ~(seg_B_pa_Pin | seg_C_pa_Pin | seg_E_pa_Pin | seg_F_pa_Pin);
-				*pb &= ~( seg_G_pb_Pin);
-				break;}
-			case 'h':{
-				*pa &= ~( seg_C_pa_Pin | seg_E_pa_Pin | seg_F_pa_Pin);
-				*pb &= ~( seg_G_pb_Pin);
-				break;}
-			case 'I':{
-				*pa &= ~( seg_E_pa_Pin | seg_F_pa_Pin);
-				// *pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
-				break;}
-			case 'J':{
-				*pa &= ~( seg_B_pa_Pin | seg_C_pa_Pin | seg_E_pa_Pin );
-				*pb &= ~(seg_D_pb_Pin );
-				break;}
-			case 'L':{
-				*pa &= ~(seg_E_pa_Pin | seg_F_pa_Pin);
-				*pb &= ~(seg_D_pb_Pin );
-				break;}
-			case 'n':{
-				*pa &= ~( seg_C_pa_Pin | seg_E_pa_Pin );
-				*pb &= ~( seg_G_pb_Pin);
-				break;}
-			case 'O':{
-				*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin | seg_C_pa_Pin | seg_E_pa_Pin | seg_F_pa_Pin);
-				*pb &= ~(seg_D_pb_Pin );
-				break;}
-			case 'o':{
-				*pa &= ~( seg_C_pa_Pin | seg_E_pa_Pin );
-				*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
-				break;}
-			case 'P':{
-				*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin  | seg_E_pa_Pin | seg_F_pa_Pin);
-				*pb &= ~( seg_G_pb_Pin);
-				break;}
-			case 'q':{
-				*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin | seg_C_pa_Pin | seg_F_pa_Pin);
-				*pb &= ~( seg_G_pb_Pin);
-				break;}
-			case 'r':{
-				*pa &= ~( seg_E_pa_Pin );
-				*pb &= ~(seg_G_pb_Pin);
-				break;}
-			case 'S':{
-				*pa &= ~(seg_A_pa_Pin | seg_C_pa_Pin  | seg_F_pa_Pin);
-				*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
-				break;}
-			case 't':{
-				*pa &= ~( seg_E_pa_Pin | seg_F_pa_Pin);
-				*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
-				break;}
-			case 'U':{
-				*pa &= ~(  seg_B_pa_Pin | seg_C_pa_Pin | seg_E_pa_Pin | seg_F_pa_Pin);
-				*pb &= ~(seg_D_pb_Pin );
-				break;}
-			case 'u':{
-				*pa &= ~( seg_C_pa_Pin | seg_E_pa_Pin );
-				*pb &= ~(seg_D_pb_Pin );
-				break;}
-			case 'y':{
-				*pa &= ~( seg_B_pa_Pin | seg_C_pa_Pin  | seg_F_pa_Pin);
-				*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
-				break;}
-
-			//specials:
-			case 'K':{
-				*pa &= ~(seg_A_pa_Pin | seg_C_pa_Pin | seg_E_pa_Pin | seg_F_pa_Pin);
-				*pb &= ~(seg_G_pb_Pin);
-				break;}
-			case 'M':{
-				*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin | seg_F_pa_Pin);
-				*pb &= ~(seg_D_pb_Pin );
-				break;}
-			case 'V':{
-				*pa &= ~( seg_B_pa_Pin |   seg_F_pa_Pin);
-				*pb &= ~(seg_D_pb_Pin );
-				break;}
-			case 'W':{
-				*pa &= ~( seg_B_pa_Pin | seg_C_pa_Pin | seg_E_pa_Pin | seg_F_pa_Pin);
-				*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
-				break;}
-			case 'X':{
-				*pa &= ~(seg_A_pa_Pin  );
-				*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
-				break;}
-			case 'Z':{
-				*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin    | seg_E_pa_Pin);
-				*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
-				break;}
-			case '_':{
-				//*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin    | seg_E_pa_Pin);
-				*pb &= ~(seg_D_pb_Pin );
-				break;}
-			case '-':{
-				//*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin    | seg_E_pa_Pin);
-				*pb &= ~(seg_G_pb_Pin );
-				break;}
-			case '.':{
-				pb -=1;pa-=1;size_buff--;
-				//*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin    | seg_E_pa_Pin);
-				*pb &= ~(seg_DP_pb_Pin );
-				break;}
-			default:
-				*pb &=~seg_DP_pb_Pin;
-			// specials:
-			/*case 'm':{
-				*pa &= ~( seg_C_pa_Pin | seg_E_pa_Pin );
-				*pb &= ~( seg_G_pb_Pin | seg_DP_pb_Pin);
-
-				pa+=1;pb+=1;
-				*pa=0xffff & ~(dig_0_pa_Pin | dig_1_pa_Pin | dig_2_pa_Pin | dig_3_pa_Pin | dig_time_pa_Pin);
-				*pb=0xffff;
-
-				*pa &= ~( seg_C_pa_Pin | seg_E_pa_Pin );
-				*pb &= ~( seg_G_pb_Pin );
-				break;}
-			case 'x':{
-				*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin | seg_C_pa_Pin | seg_E_pa_Pin | seg_F_pa_Pin);
-				*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin | seg_DP_pb_Pin);
-
-				pa+=1;pb+=1;
-				*pa=0xffff & ~(dig_0_pa_Pin | dig_1_pa_Pin | dig_2_pa_Pin | dig_3_pa_Pin | dig_time_pa_Pin);
-				*pb=0xffff;
-				*pa &= ~(seg_A_pa_Pin | seg_B_pa_Pin | seg_C_pa_Pin | seg_E_pa_Pin | seg_F_pa_Pin);
-								*pb &= ~(seg_D_pb_Pin | seg_G_pb_Pin);
-
-			}*/
-
-
-		}
+		convert_char_to_7seg(*from,pa,pb);
+		if (*from == '.')
+			{pa-=1;pb-=1;size_buff--;}
 		pa+=1;pb+=1;from+=1;
+	}
+}
+
+void calculate_altitude(uint8_t avg){
+	float temp;
+	//float temperature=0.0;
+	//float pressure=0.0;
+	temp=((273.15+temperature)*(pow(pressure/1013.15,1.0/5.257)-1.0))/0.0065;
+	if (avg){
+		altitude=(temp+altitude)/2.0;
+	}else{
+		altitude=temp;
 	}
 }
 
