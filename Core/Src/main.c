@@ -303,11 +303,11 @@ int main(void)
 			  break;}
 
 		  }
-		  hts221_get_temp(with_avg);			//fasza
-		  hts221_get_hum(with_avg);				//fasza
-		  lps25hb_get_pressure(with_avg);		//fasza
-		  calculate_altitude(with_avg);			//fasza
-		  lis3mdl_get_azymuth(with_avg);		//kerdeses
+		  //hts221_get_temp(with_avg);			//fasza
+		  //hts221_get_hum(with_avg);				//fasza
+		  //lps25hb_get_pressure(with_avg);		//fasza
+		  //calculate_altitude(with_avg);			//fasza
+		  //lis3mdl_get_azymuth(with_avg);		//kerdeses
 
 		  //offset++;
 		  //LL_GPIO_TogglePin(led_GPIO_Port,led_Pin);
